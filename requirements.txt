@@ -1,9 +1,9 @@
-opencv-python
-streamlit
-Pillow
+streamlit==1.30.0
 tensorflow==2.16.1
-rich>=10.14.0
-dlib
-matplotlib
-numpy
-rich
+opencv-python==4.8.1.78
+dlib==19.24.1
+numpy==1.25.2
+matplotlib==3.8.0
+Pillow==10.1.0
+gdown==4.7.1
+rich==13.4.2
