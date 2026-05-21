@@ -193,7 +193,11 @@ if uploaded_file is not None:
     st.markdown(f"**Face Shape**: {display_face_shape} ({confidence:.2f}%) (confidence for predicted shape)")
 
     # Use st.markdown with proper font if needed, otherwise Streamlit's default font is fine
-  if font_prop and font_prop.get_file():  # ตรวจสอบว่าโหลดฟอนต์ได้
+ # แสดง Face Shape
+st.markdown(f"**Face Shape**: {display_face_shape} ({confidence:.2f}%) (confidence for predicted shape)")
+
+# แสดง Hairstyle Recommendation พร้อมฟอนต์ไทย
+if font_prop and font_prop.get_file():  # ตรวจสอบว่าโหลดฟอนต์ได้
     st.markdown(
         f'<div style="font-family:\'{font_prop.get_name()}\'; font-size:18px;">'
         f'<b>ทรงผมแนะนำ</b>: {display_recommend}</div>',
