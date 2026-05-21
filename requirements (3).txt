@@ -1,0 +1,4 @@
+streamlit
+Pillow
+tensorflow==2.16.1
+rich>=10.14.0
