@@ -1,215 +1,133 @@
-
 import streamlit as st
 import cv2
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 import dlib
 import os
-import random
+from PIL import Image
 import matplotlib.font_manager as fm
-
-# Import the correct preprocess_input for InceptionResNetV2
-from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input as inceptionresnet_preprocess_input
+import gdown
 
 # -----------------------------
-# ฟังก์ชัน preprocess (Preprocess function)
+# Google Drive Model URL
 # -----------------------------
-def preprocess_for_inceptionresnet(x):
-    x = tf.cast(x, tf.float32)
-    return inceptionresnet_preprocess_input(x)
+MODEL_URL = "https://drive.google.com/uc?id=1-JNL73G3fSpJZuCPEfTjSdXaXOpHtI6h"
+MODEL_LOCAL = "best_inceptionresnetv2_face_shape.keras"
 
 # -----------------------------
-# โหลดฟอนต์ภาษาไทย (Load Thai fonts)
+# Download model if not exists
 # -----------------------------
-# This block should only be run once for setup, or handled outside Streamlit's main loop
-# For simplicity in this app.py, we'll try to ensure it's available.
-# In a real Streamlit deployment, these would typically be pre-installed or handled in setup.
+if not os.path.exists(MODEL_LOCAL):
+    gdown.download(MODEL_URL, MODEL_LOCAL, quiet=False)
 
-# Suppress output from apt-get commands
-import subprocess
+# -----------------------------
+# Caching model load
+# -----------------------------
+@st.cache_resource
+def load_model(path):
+    return tf.keras.models.load_model(path)
 
-def install_thai_fonts():
-    try:
-        # Ensure non-interactive mode for apt-get to prevent hanging
-        subprocess.run(['apt-get', 'update', '-qq'], check=True, capture_output=True, text=True)
-        subprocess.run(['apt-get', 'install', '-y', 'fonts-thai-tlwg'], check=True, capture_output=True, text=True)
-        print("Thai fonts installed successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error installing Thai fonts: {e.stderr}")
-    except FileNotFoundError:
-        print("apt-get command not found. Skipping font installation.")
+face_shape_model = load_model(MODEL_LOCAL)
 
-install_thai_fonts()
+# -----------------------------
+# Dlib setup
+# -----------------------------
+PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
+if not os.path.exists(PREDICTOR_PATH):
+    import urllib.request
+    url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
+    urllib.request.urlretrieve(url, "shape_predictor_68_face_landmarks.dat.bz2")
+    import bz2
+    with bz2.BZ2File("shape_predictor_68_face_landmarks.dat.bz2") as fr, open(PREDICTOR_PATH, "wb") as fw:
+        fw.write(fr.read())
 
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor(PREDICTOR_PATH)
+
+# -----------------------------
+# Fonts for Thai
+# -----------------------------
 font_path_sarabun = "/usr/share/fonts/truetype/th-sarabun-new/THSarabunNew.ttf"
-font_path_loma = "/usr/share/fonts/truetype/tlwg/Loma.ttf"
-
-font_prop = None
-if os.path.exists(font_path_sarabun):
-    font_prop = fm.FontProperties(fname=font_path_sarabun)
-    # st.write(f"Using Thai font: {font_path_sarabun}") # Streamlit doesn't show print/write during init
-elif os.path.exists(font_path_loma):
-    font_prop = fm.FontProperties(fname=font_path_loma)
-    # st.write(f"Using Thai font: {font_path_loma}")
-else:
-    try:
-        generic_sans_serif_path = fm.findfont(fm.FontProperties(family='sans-serif'))
-        font_prop = fm.FontProperties(fname=generic_sans_serif_path)
-        # st.write(f"Falling back to system sans-serif: {generic_sans_serif_path}.")
-    except Exception:
-        font_prop = fm.FontProperties() # Final fallback
+font_prop = fm.FontProperties(fname=font_path_sarabun) if os.path.exists(font_path_sarabun) else None
 
 # -----------------------------
-# โหลดโมเดล Face Shape (Load Face Shape Model)
-# -----------------------------
-@st.cache_resource
-def load_face_shape_model():
-    model = tf.keras.models.load_model(
-        '/content/drive/MyDrive/best_inceptionresnetv2_face_shape.keras',
-        safe_mode=False,
-        custom_objects={'preprocess': preprocess_for_inceptionresnet}
-    )
-    return model
-
-face_shape_model = load_face_shape_model()
-
-# -----------------------------
-# โหลด dlib landmark model (Load dlib landmark model)
-# -----------------------------
-@st.cache_resource
-def load_dlib_models():
-    predictor_path = "shape_predictor_68_face_landmarks.dat"
-    if not os.path.exists(predictor_path):
-        # Use subprocess to run shell commands to ensure Streamlit can execute them
-        try:
-            st.info("Downloading shape_predictor_68_face_landmarks.dat...")
-            # Capture output to avoid polluting Streamlit logs with wget/bzip2 messages
-            subprocess.run(['wget', '-q', 'http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2'], check=True, capture_output=True, text=True)
-            subprocess.run(['bzip2', '-dk', 'shape_predictor_68_face_landmarks.dat.bz2'], check=True, capture_output=True, text=True)
-            st.success("Shape predictor downloaded successfully.")
-        except subprocess.CalledProcessError as e:
-            st.error(f"Failed to download shape_predictor_68_face_landmarks.dat: {e.stderr}")
-            st.stop()
-        except FileNotFoundError:
-            st.error("wget or bzip2 command not found. Cannot download dlib model.")
-            st.stop()
-    detector = dlib.get_frontal_face_detector()
-    predictor = dlib.shape_predictor(predictor_path)
-    return detector, predictor
-
-detector, predictor = load_dlib_models()
-
-# -----------------------------
-# คลาสรูปหน้า (Face Shape Classes)
+# Class labels & hairstyle recommendations
 # -----------------------------
 classes = ['Heart', 'Oblong', 'Oval', 'Round', 'Square']
-
-# -----------------------------
-# Hairstyle Recommendation (อ้างอิง Paper)
-# -----------------------------
 hairstyle_recommendations = {
-    'Oval': 'ผมสั้นถึงกลาง เช่น blunt bob, shoulder-length, pixie cut, long layers และหน้าม้าปัดข้าง ช่วยเน้นดวงตาและโหนกแก้ม',
-    'Square': 'ผมยาวปานกลางถึงยาว พร้อมไล่เลเยอร์หรือปลายฟุ้ง เช่น beach waves และหน้าม้านุ่มๆ ช่วยลดความเหลี่ยมของกราม',
-    'Round': 'ทรงเพิ่มความสูงให้ใบหน้า เช่น textured bob, long layers, แสกข้าง และ blunt bangs ช่วยให้หน้าดูยาวขึ้น',
-    'Heart': 'ผมยาวระดับไหล่ พร้อมเลเยอร์บริเวณกราม curtain bangs หรือ wispy bangs ช่วยบาลานซ์หน้าผากกว้าง',
-    'Oblong': 'ลอนคลาย, loose curls, layered bob และหน้าม้าปัดข้างหรือ curtain bangs ช่วยเพิ่มความกว้างให้ใบหน้า'
+    'Oval': 'ผมสั้นถึงกลาง เช่น blunt bob, shoulder-length, pixie cut, long layers และหน้าม้าปัดข้าง',
+    'Square': 'ผมยาวปานกลางถึงยาว พร้อมไล่เลเยอร์หรือปลายฟุ้ง เช่น beach waves และหน้าม้านุ่มๆ',
+    'Round': 'ทรงเพิ่มความสูงให้ใบหน้า เช่น textured bob, long layers, แสกข้าง และ blunt bangs',
+    'Heart': 'ผมยาวระดับไหล่ พร้อมเลเยอร์บริเวณกราม curtain bangs หรือ wispy bangs',
+    'Oblong': 'ลอนคลาย, loose curls, layered bob และหน้าม้าปัดข้างหรือ curtain bangs'
 }
 
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Face Shape Detector", layout="centered")
+st.markdown("""
+<style>
+body {background: linear-gradient(to right, #e0f7fa, #fff9c4);}
+h1 {text-align:center; color:#004d40;}
+.stButton>button {background-color:#00796b; color:white; border-radius:8px; font-weight:bold;}
+.stImage>div>figcaption {text-align:center; font-style:italic; color:#004d40;}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("Face Shape Detector & Hairstyle Recommendation")
-st.write("Upload an image to detect face shape, landmarks, golden ratio and get hairstyle recommendation.")
+uploaded_file = st.file_uploader("Upload a face image", type=["jpg","jpeg","png"])
 
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+SAVE_DIR = "saved_results"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-if uploaded_file is not None:
-    # Read image from Streamlit
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
-    if img is None:
-        st.error("Cannot decode image. Please upload a valid image file.")
-        st.stop()
-
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+def predict_face_shape(img_pil):
+    img = np.array(img_pil.convert("RGB"))
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
     img_landmarks = img_rgb.copy()
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # -----------------------------
-    # ทำนาย face shape (Predict Face Shape)
-    # -----------------------------
-    IMG_SIZE_MODEL = 299 # Assuming the model expects 299x299 as per InceptionResNetV2
-    img_resized = cv2.resize(img, (IMG_SIZE_MODEL, IMG_SIZE_MODEL))
-    img_processed = preprocess_for_inceptionresnet(img_resized)
-    img_input = np.expand_dims(img_processed, axis=0)
-
+    # Resize for model
+    img_resized = cv2.resize(img_rgb, (299, 299))
+    img_input = np.expand_dims(img_resized, axis=0)
     pred = face_shape_model.predict(img_input, verbose=0)
     idx = np.argmax(pred)
     face_shape = classes[idx]
-    confidence = pred[0][idx] * 100
+    confidence = pred[0][idx]*100
 
-    # -----------------------------
-    # ตรวจจับ landmark และ golden ratio (Detect landmark and golden ratio)
-    # -----------------------------
+    # Landmark detection
     faces = detector(gray)
-    ratiog = 0.0
-    score = 0.0
-
-    if len(faces) == 0:
-        st.warning("No face detected in the image.")
-        display_face_shape = "N/A"
-        display_recommend = "No recommendation (face not detected)"
-    else:
+    ratiog = 0
+    score = 0
+    if len(faces)>0:
         for face in faces:
             landmarks = predictor(gray, face)
             for i in range(68):
                 x = landmarks.part(i).x
                 y = landmarks.part(i).y
-                cv2.circle(img_landmarks, (x, y), 1, (0, 255, 0), -1)
-
+                cv2.circle(img_landmarks,(x,y),1,(0,255,0),-1)
             chin = landmarks.part(8)
             forehead = landmarks.part(27)
             left_face = landmarks.part(0)
             right_face = landmarks.part(16)
+            face_height = abs(chin.y-forehead.y)
+            face_width = abs(right_face.x-left_face.x)
+            if face_width>0:
+                ratiog = face_height/face_width
+                score = max(0,min((1-abs(ratiog-1.618)/1.618)*100,100))
+    else:
+        return "No face detected", None
 
-            face_height = abs(chin.y - forehead.y)
-            face_width = abs(right_face.x - left_face.x)
-            golden_ratio = 1.618
-            if face_width > 0:
-                ratiog = face_height / face_width
-                score = (1 - abs(ratiog - golden_ratio) / golden_ratio) * 100
-                score = max(0, min(score, 100))
+    recommend = hairstyle_recommendations[face_shape]
 
-        display_face_shape = face_shape
-        display_recommend = hairstyle_recommendations.get(face_shape, "No specific recommendation available.")
+    # Save landmark image
+    fname = f"{SAVE_DIR}/landmarks_{np.random.randint(0,9999)}.png"
+    cv2.imwrite(fname, cv2.cvtColor(img_landmarks, cv2.COLOR_RGB2BGR))
 
-    # -----------------------------
-    # แสดงผล (Display results)
-    # -----------------------------
-    st.subheader("Result")
-    st.markdown(f"**Face Shape**: {display_face_shape} ({confidence:.2f}%) (confidence for predicted shape)")
+    return f"Face Shape: {face_shape} ({confidence:.2f}%)\nHairstyle: {recommend}\nGolden Ratio: {ratiog:.2f} | Score: {score:.2f}%", img_landmarks
 
-    # Use st.markdown with proper font if needed, otherwise Streamlit's default font is fine
- # แสดง Face Shape
-st.markdown(f"**Face Shape**: {display_face_shape} ({confidence:.2f}%) (confidence for predicted shape)")
-
-# แสดง Hairstyle Recommendation พร้อมฟอนต์ไทย
-if font_prop and font_prop.get_file():  # ตรวจสอบว่าโหลดฟอนต์ได้
-    st.markdown(
-        f'<div style="font-family:\'{font_prop.get_name()}\'; font-size:18px;">'
-        f'<b>ทรงผมแนะนำ</b>: {display_recommend}</div>',
-        unsafe_allow_html=True
-    )
-else:
-    st.markdown(f"**Hairstyle Recommendation**: {display_recommend}")
-
-    st.write(f"Golden Ratio: {ratiog:.2f} | Score: {score:.2f}%")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.image(img_rgb, caption="Original Image", use_column_width=True)
-    with col2:
-        st.image(img_landmarks, caption="Landmarks Detected", use_column_width=True)
+if uploaded_file is not None:
+    img_pil = Image.open(uploaded_file)
+    result_text, landmark_img = predict_face_shape(img_pil)
+    st.text_area("Prediction Result", result_text, height=120)
+    st.image(landmark_img, caption="Landmarks Detected", use_column_width=True)
