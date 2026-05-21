@@ -1,9 +1,8 @@
-streamlit==1.30.0
-tensorflow==2.16.1
-numpy>=1.26.0,<=1.26.4
-opencv-python==4.8.1.78
-https://github.com/alvinregin/dlib-wheels/releases/download/v20.0.0/dlib-20.0.0-cp312-cp312-linux_x86_64.whl
-matplotlib==3.8.0
-Pillow==10.1.0
-gdown==4.7.1
-rich==13.4.2
+streamlit
+opencv-python-headless
+numpy
+tensorflow
+dlib
+Pillow
+matplotlib
+gdown
